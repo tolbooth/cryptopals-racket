@@ -4,6 +4,7 @@
 ;; Some shorthands to make life easier
 (define & bitwise-and)
 (define << arithmetic-shift)
+(define ^ bitwise-xor)
 (define bor bitwise-ior)
 (:
  >>
@@ -25,7 +26,7 @@
 (: hex-pair->byte (-> Char Char Byte))
 (define (hex-pair->byte x1 x0)
   (cast (+ (<< (hex-char->int x1) 4)
-        (hex-char->int x0)) Byte))
+           (hex-char->int x0)) Byte))
 
 ;; Convert a hexadecimal string to a Byte string
 (: hex-string->bytes (-> String Bytes))
@@ -37,14 +38,28 @@
   (let loop ((i : Nonnegative-Integer 0)
              (j : Nonnegative-Integer 0))
     (cond
-      ;; Base case, return the buffer
-      [(= i len) buffer]
+      [(= i len) buffer]  ;; Base case, return the buffer
       [else
        (let* ([lo-char (string-ref hex-str i)]
               [hi-char (string-ref hex-str (+ i 1))]
               [byte-val (hex-pair->byte lo-char hi-char)])
          (bytes-set! buffer j byte-val)
          (loop (+ i 2) (+ j 1)))])))
+
+(define HEX-DIGITS "0123456789abcdef")
+(: bytes->hex-string (-> Bytes String))
+(define (bytes->hex-string bytes)
+  (define len (bytes-length bytes))
+  (define out-str (make-string (* len 2)))
+
+  (let loop ([i : Nonnegative-Integer 0])
+    (cond
+      [(= i len) out-str] ;; Base case, return the string
+      [else
+       (let ([b (bytes-ref bytes i)])
+         (string-set! out-str (* i 2)       (string-ref HEX-DIGITS (>> b 4)))
+         (string-set! out-str (+ (* i 2) 1) (string-ref HEX-DIGITS (& b #xF)))
+         (loop (+ i 1)))])))
 
 ;; Get the character corresponding to the base64 integer value
 (define BASE64-ALPHABET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
@@ -109,10 +124,15 @@
 (: fixed-xor
    (-> String String
        String))
-(define
-  (fixed-xor hex1 hex2)
-  (string-append hex1 hex2)) ;; TODO
-
+(define (fixed-xor str1 str2)
+  (define hex1 (hex-string->bytes str1))
+  (define hex2 (hex-string->bytes str2))
+  (bytes->hex-string
+   (list->bytes
+    (for/list : (Listof Byte)
+      ([b1 (bytes->list hex1)]
+       [b0 (bytes->list hex2)])
+      (cast (^ b0 b1) Byte)))))
 
 
 ;; =========== TESTS =============
@@ -126,12 +146,22 @@
               (bytes #xab #x1c #x9f))
 (check-equal? (hex-string->bytes "")
               #"")
+
 (check-exn exn:fail?
            (lambda () (hex-string->bytes "abc"))
            "Should throw an error if input length is odd")
 (check-exn exn:fail?
            (lambda () (hex-string->bytes "zz"))
            "Should throw an error if input contains invalid characters")
+
+(check-equal? (bytes->hex-string (bytes #xde #xad #xbe #xef))
+              "deadbeef")
+(check-equal? (bytes->hex-string #"Hello")
+              "48656c6c6f")
+(check-equal? (bytes->hex-string (bytes #xab #x1c #x9f))
+              "ab1c9f")
+(check-equal? (bytes->hex-string #"")
+              "")
 
 ;; Set 1, Challenge 1
 (check-equal? (hex2b64 "49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e6f7573206d757368726f6f6d")
@@ -141,4 +171,3 @@
 (check-equal? (fixed-xor "1c0111001f010100061a024b53535009181c"
                          "686974207468652062756c6c277320657965")
               "746865206b696420646f6e277420706c6179")
-

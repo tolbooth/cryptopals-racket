@@ -12,6 +12,35 @@
      Integer))
 (define >> (λ (a b) (arithmetic-shift a (* -1 b))))
 
+;; Global constants
+(define BASE64-ALPHABET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+
+(define HEX-DIGITS "0123456789abcdef")
+
+(define english-freqs : (Listof (Pairof Char Inexact-Real))
+  '((#\a . 8.55) (#\k . 0.81) (#\u . 2.68)
+                 (#\b . 1.60) (#\l . 4.21) (#\v . 1.06)
+                 (#\c . 3.16) (#\m . 2.53) (#\w . 1.83)
+                 (#\d . 3.87) (#\n . 7.17) (#\x . 0.19)
+                 (#\e . 12.1) (#\o . 7.47) (#\y . 1.72)
+                 (#\f . 2.18) (#\p . 2.07) (#\z . 0.11)
+                 (#\g . 2.09) (#\q . 0.10)
+                 (#\h . 4.96) (#\r . 6.33)
+                 (#\i . 7.33) (#\s . 6.73)
+                 (#\j . 0.22) (#\t . 8.94)))
+
+;; Very basic frequency table. May need to be improved
+(: freq-table (Vectorof Inexact-Real))
+(define freq-table
+  (let ([vec : (Vectorof Inexact-Real) (make-vector 256 0.0)])
+    (for ([pair english-freqs])
+      (define char (car pair))
+      (define score (cdr pair))
+      (vector-set! vec (char->integer char) score)
+      (vector-set! vec (char->integer (char-upcase char)) score))
+    (vector-set! vec (char->integer #\space) 13.0) ;; Arbitrary, but space is most common
+    vec))
+
 ;; Convert a single hex char to its Byte value
 (: hex-char->int (-> Char Fixnum))
 (define (hex-char->int c)
@@ -46,7 +75,7 @@
          (bytes-set! buffer j byte-val)
          (loop (+ i 2) (+ j 1)))])))
 
-(define HEX-DIGITS "0123456789abcdef")
+;; Convert a Bytes string to a hexidecimal string
 (: bytes->hex-string (-> Bytes String))
 (define (bytes->hex-string bytes)
   (define len (bytes-length bytes))
@@ -62,7 +91,6 @@
          (loop (+ i 1)))])))
 
 ;; Get the character corresponding to the base64 integer value
-(define BASE64-ALPHABET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 (: base64-char (-> Integer Char))
 (define (base64-char n) (string-ref BASE64-ALPHABET n))
 
@@ -122,17 +150,56 @@
     (base64-encode bytes)))
 
 (: fixed-xor
+   (-> Bytes Bytes
+       Bytes))
+(define (fixed-xor hex1 hex2)
+  (list->bytes
+   (for/list : (Listof Byte)
+     ([b1 (bytes->list hex1)]
+      [b0 (bytes->list hex2)])
+     (cast (^ b0 b1) Byte))))
+
+(: fixed-xor-string
    (-> String String
        String))
-(define (fixed-xor str1 str2)
-  (define hex1 (hex-string->bytes str1))
-  (define hex2 (hex-string->bytes str2))
+(define
+  (fixed-xor-string str1 str2)
   (bytes->hex-string
-   (list->bytes
-    (for/list : (Listof Byte)
-      ([b1 (bytes->list hex1)]
-       [b0 (bytes->list hex2)])
-      (cast (^ b0 b1) Byte)))))
+   (fixed-xor (hex-string->bytes str1)
+              (hex-string->bytes str2))))
+
+(struct Candidate
+  ([plaintext : Bytes]
+   [key : Byte]
+   [score : Inexact-Real]))
+
+(: score-text
+   (-> Bytes
+       Inexact-Real))
+(define (score-text plaintext)
+  (for/fold ([total : Inexact-Real 0.0])
+            ([byte (in-bytes plaintext)])
+    (+ total (vector-ref freq-table byte))))
+
+(: break-single-byte-xor
+   (-> String
+       Candidate))
+(define (break-single-byte-xor input)
+  (define ciphertext (hex-string->bytes input))
+  (define init-best (Candidate ciphertext 0 -1.0))
+
+  (for/fold ([current-best : Candidate init-best])
+            ([key : Integer (in-range 256)])
+
+    (define plaintext
+      (fixed-xor (make-bytes (bytes-length ciphertext) key)
+                 ciphertext))
+    (define score
+      (score-text plaintext))
+
+    (if (> score (Candidate-score current-best))
+        (Candidate plaintext (cast key Byte) score)
+        current-best)))
 
 
 ;; =========== TESTS =============
@@ -168,6 +235,12 @@
               "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t")
 
 ;; Set 1, Challenge 2
-(check-equal? (fixed-xor "1c0111001f010100061a024b53535009181c"
-                         "686974207468652062756c6c277320657965")
+(check-equal? (fixed-xor-string "1c0111001f010100061a024b53535009181c"
+                                "686974207468652062756c6c277320657965")
               "746865206b696420646f6e277420706c6179")
+
+;; Set 1, Challenge 3
+(define challenge-3-secret
+  (break-single-byte-xor "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736"))
+(Candidate-plaintext challenge-3-secret)
+(Candidate-key challenge-3-secret)

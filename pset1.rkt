@@ -1,6 +1,5 @@
 #lang typed/racket
 (require typed/rackunit)
-(require racket/file)
 
 ;; Some shorthands to make life easier
 (define & bitwise-and)
@@ -95,7 +94,7 @@
 (: hex-encode (-> String Bytes))
 (define (hex-encode str)
   (list->bytes
-    (map char->integer (string->list str))))
+   (map char->integer (string->list str))))
 
 ;; Get the character corresponding to the base64 integer value
 (: base64-char (-> Integer Char))
@@ -239,6 +238,30 @@
                           [b (in-cycle bytes)])
                  b)))))
 
+;; Count the number of 1's in a byte. Kernighan's method.
+;; This is probably slow.
+(: count-ones (-> Byte Nonnegative-Integer))
+(define (count-ones b)
+  (: count-ones-loop (-> Byte Nonnegative-Integer Nonnegative-Integer))
+  (define (count-ones-loop b sum)
+    (cond [(zero? b) sum]
+          [else
+           (count-ones-loop (& b (- b 1))
+                            (+ 1 sum))]))
+  (count-ones-loop b 0))
+
+;; Compute the hamming distance between two byte strings.
+(: ham-bytes (-> Bytes Bytes Nonnegative-Integer))
+(define (ham-bytes byt1 byt2)
+  (define xord (fixed-xor byt1 byt2))
+  (for/fold ([dist : Nonnegative-Integer 0])
+            ([byte (in-bytes xord)])
+    (+ dist (count-ones byte))))
+
+(: hamming (-> String String Nonnegative-Integer))
+(define (hamming str1 str2)
+  (ham-bytes (hex-encode str1) (hex-encode str2)))
+
 
 ;; =========== TESTS =============
 
@@ -268,6 +291,15 @@
 (check-equal? (bytes->hex-string #"")
               "")
 
+(check-equal? (count-ones 0)
+              0)
+(check-equal? (count-ones (hex-pair->byte #\F #\F))
+              8)
+(check-equal? (count-ones (hex-pair->byte #\A #\A))
+              4)
+(check-equal? (hamming "this is a test" "wokka wokka!!!")
+              37)
+
 
 ;; Challenges
 
@@ -294,9 +326,11 @@
 
 ;; Set 1, Challenge 5
 (define challenge-5-plaintext
-"Burning 'em, if you ain't quick and nimble
+  "Burning 'em, if you ain't quick and nimble
 I go crazy when I hear a cymbal")
 (define challenge-5-ciphertext
-"0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f")
+  "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f")
 (check-equal? (repeating-key-xor-string challenge-5-plaintext #"ICE")
               challenge-5-ciphertext)
+
+;; Set 1, Challenge 6

@@ -91,6 +91,12 @@
          (string-set! out-str (+ (* i 2) 1) (string-ref HEX-DIGITS (& b #xF)))
          (loop (+ i 1)))])))
 
+;; Produce the hex encoding of a given string
+(: hex-encode (-> String Bytes))
+(define (hex-encode str)
+  (list->bytes
+    (map char->integer (string->list str))))
+
 ;; Get the character corresponding to the base64 integer value
 (: base64-char (-> Integer Char))
 (define (base64-char n) (string-ref BASE64-ALPHABET n))
@@ -222,6 +228,17 @@
         candidate
         current-best)))
 
+(: repeating-key-xor-string
+   (-> String Bytes
+       String))
+(define (repeating-key-xor-string str bytes)
+  (bytes->hex-string
+   (fixed-xor (hex-encode str)
+              (list->bytes
+               (for/list ([_i (in-range (string-length str))]
+                          [b (in-cycle bytes)])
+                 b)))))
+
 
 ;; =========== TESTS =============
 
@@ -251,6 +268,9 @@
 (check-equal? (bytes->hex-string #"")
               "")
 
+
+;; Challenges
+
 ;; Set 1, Challenge 1
 (check-equal? (hex2b64 "49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e6f7573206d757368726f6f6d")
               "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t")
@@ -271,3 +291,12 @@
   (find-single-byte-xor (read-lines-as-list "./data/4.txt")))
 (Candidate-plaintext challenge-4-secret)
 (Candidate-key challenge-4-secret)
+
+;; Set 1, Challenge 5
+(define challenge-5-plaintext
+"Burning 'em, if you ain't quick and nimble
+I go crazy when I hear a cymbal")
+(define challenge-5-ciphertext
+"0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f")
+(check-equal? (repeating-key-xor-string challenge-5-plaintext #"ICE")
+              challenge-5-ciphertext)

@@ -1,5 +1,6 @@
 #lang typed/racket
 (require typed/rackunit)
+(require racket/file)
 
 ;; Some shorthands to make life easier
 (define & bitwise-and)
@@ -201,6 +202,26 @@
         (Candidate plaintext (cast key Byte) score)
         current-best)))
 
+(: read-lines-as-list (-> String (Listof String)))
+(define (read-lines-as-list path)
+  (call-with-input-file path
+    (lambda ([in : Input-Port])
+      (sequence->list (in-lines in)))))
+
+(: find-single-byte-xor
+   (-> (Listof String)
+       Candidate))
+(define (find-single-byte-xor messages)
+  (define init-best (Candidate #"" 0 -1.0))
+  (for/fold ([current-best : Candidate init-best])
+            ([str (in-list messages)])
+    (define candidate
+      (break-single-byte-xor str))
+    (if (> (Candidate-score candidate)
+           (Candidate-score current-best))
+        candidate
+        current-best)))
+
 
 ;; =========== TESTS =============
 
@@ -244,3 +265,9 @@
   (break-single-byte-xor "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736"))
 (Candidate-plaintext challenge-3-secret)
 (Candidate-key challenge-3-secret)
+
+;; Set 1, Challenge 4
+(define challenge-4-secret
+  (find-single-byte-xor (read-lines-as-list "./data/4.txt")))
+(Candidate-plaintext challenge-4-secret)
+(Candidate-key challenge-4-secret)

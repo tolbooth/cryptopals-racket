@@ -15,6 +15,13 @@
 ;; Global constants
 (define BASE64-ALPHABET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 
+(define BASE64-LOOKUP
+  (let ([vec (make-vector 256 0)])
+    (for ([char (in-string BASE64-ALPHABET)]
+          [i (in-naturals)])
+      (vector-set! vec (char->integer char) i))
+    vec))
+
 (define HEX-DIGITS "0123456789abcdef")
 
 (define english-freqs : (Listof (Pairof Char Inexact-Real))
@@ -40,6 +47,18 @@
       (vector-set! vec (char->integer (char-upcase char)) score))
     (vector-set! vec (char->integer #\space) 13.0) ;; Arbitrary, but space is most common
     vec))
+
+;; Generic utilities
+
+(: read-lines-as-list (-> String (Listof String)))
+(define (read-lines-as-list path)
+  (call-with-input-file path
+    (lambda ([in : Input-Port])
+      (sequence->list (in-lines in)))))
+
+(: read-chunk (-> Bytes Integer Integer Bytes))
+(define (read-chunk bytes start size)
+  (subbytes bytes start (min (+ start size) (bytes-length bytes))))
 
 ;; Convert a single hex char to its Byte value
 (: hex-char->int (-> Char Fixnum))
@@ -70,10 +89,17 @@
       [(= i len) buffer]  ;; Base case, return the buffer
       [else
        (let* ([lo-char (string-ref hex-str i)]
-              [hi-char (string-ref hex-str (+ i 1))]
+              [hi-char (string-ref hex-str (add1 i))]
               [byte-val (hex-pair->byte lo-char hi-char)])
          (bytes-set! buffer j byte-val)
          (loop (+ i 2) (+ j 1)))])))
+
+;; Decode a file encoded as base64
+(: base64-file->bytes (-> String Bytes))
+(define (base64-file->bytes path)
+  (let* ([lines (file->lines path)]
+         [clean-str (apply string-append lines)])
+    (base64-decode clean-str)))
 
 ;; Convert a Bytes string to a hexidecimal string
 (: bytes->hex-string (-> Bytes String))
@@ -87,8 +113,8 @@
       [else
        (let ([b (bytes-ref bytes i)])
          (string-set! out-str (* i 2)       (string-ref HEX-DIGITS (>> b 4)))
-         (string-set! out-str (+ (* i 2) 1) (string-ref HEX-DIGITS (& b #xF)))
-         (loop (+ i 1)))])))
+         (string-set! out-str (add1 (* i 2)) (string-ref HEX-DIGITS (& b #xF)))
+         (loop (add1 i)))])))
 
 ;; Produce the hex encoding of a given string
 (: hex-encode (-> String Bytes))
@@ -97,8 +123,15 @@
    (map char->integer (string->list str))))
 
 ;; Get the character corresponding to the base64 integer value
-(: base64-char (-> Integer Char))
-(define (base64-char n) (string-ref BASE64-ALPHABET n))
+(: base64-val->char (-> Integer Char))
+(define (base64-val->char n) (string-ref BASE64-ALPHABET n))
+
+;; Get the base64 integer value corresponding to the character
+(: base64-char->val (-> Char Integer))
+(define (base64-char->val char)
+  (if (char=? char #\=)
+      0
+      (vector-ref BASE64-LOOKUP (char->integer char))))
 
 ;; Convert a Byte string to a base64 encoded string
 ;; Based on https://datatracker.ietf.org/doc/html/rfc4648#section-4
@@ -114,8 +147,10 @@
           [(= remaining 1)
            (let
                ([b0 (bytes-ref bytes i)])
-             (string-set! string j (base64-char (>> b0 2)))
-             (string-set! string (+ j 1) (base64-char (<< (& b0 3) 4)))
+             (string-set! string j
+                          (base64-val->char (>> b0 2)))
+             (string-set! string (add1 j)
+                          (base64-val->char  (<< (& b0 3) 4)))
              (string-set! string (+ j 2) #\=)
              (string-set! string (+ j 3) #\=)
              string)]
@@ -123,12 +158,13 @@
            (let
                ([b0 (bytes-ref bytes i)]
                 [b1 (bytes-ref bytes (+ i 1))])
-             (string-set! string j (base64-char (>> b0 2)))
+             (string-set! string j
+                          (base64-val->char  (>> b0 2)))
              (string-set! string (+ j 1)
-                          (base64-char (bor (<< (& b0 3) 4)
-                                            (>> b1 4))))
+                          (base64-val->char  (bor (<< (& b0 3) 4)
+                                                  (>> b1 4))))
              (string-set! string (+ j 2)
-                          (base64-char (<< (& b1 15) 2)))
+                          (base64-val->char  (<< (& b1 15) 2)))
              (string-set! string (+ j 3) #\=)
              string)]
           ;; Main loop, takes chunks of 3 bytes
@@ -137,15 +173,56 @@
                  [b1 (bytes-ref bytes (+ i 1))]
                  [b2 (bytes-ref bytes (+ i 2))])
 
-             (string-set! string j (base64-char (>> (& b0 252) 2)))
+             (string-set! string j
+                          (base64-val->char  (>> (& b0 252) 2)))
              (string-set! string (+ j 1)
-                          (base64-char (+ (<< (& b0 3) 4)
-                                          (>> (& b1 240) 4))))
+                          (base64-val->char  (+ (<< (& b0 3) 4)
+                                                (>> (& b1 240) 4))))
              (string-set! string (+ j 2)
-                          (base64-char (+ (<< (& b1 15) 2)
-                                          (>> (& b2 192) 6))))
-             (string-set! string (+ j 3) (base64-char (+ (& b2 63))))
+                          (base64-val->char  (+ (<< (& b1 15) 2)
+                                                (>> (& b2 192) 6))))
+             (string-set! string (+ j 3)
+                          (base64-val->char  (+ (& b2 63))))
              (loop (+ i 3) (+ j 4)))])))
+
+;; Convert a base64 encoded string to a Byte string
+(: base64-decode (-> String Bytes))
+(define (base64-decode str)
+  (define len (string-length str))
+
+  ;; Exclude padding characters
+  (define pad-count
+    (cond
+      [(zero? len) 0]
+      [(and (> len 1) (char=? (string-ref str (- len 1)) #\=))
+       (if (char=? (string-ref str (- len 2)) #\=) 2 1)]
+      [else 0]))
+
+  (define out-len (- (* (quotient len 4) 3) pad-count))
+  (define bytes (make-bytes out-len))
+
+  (let loop ((i : Nonnegative-Integer 0)
+             (j : Nonnegative-Integer 0))
+    (if (>= i len)
+        bytes
+        (let* ([c0 (base64-char->val (string-ref str i))]
+               [c1 (base64-char->val (string-ref str (+ i 1)))]
+               [c2 (base64-char->val (string-ref str (+ i 2)))]
+               [c3 (base64-char->val (string-ref str (+ i 3)))]
+
+               ;; Build our integer
+               [bits (bor (<< c0 18)
+                          (<< c1 12)
+                          (<< c2 6)
+                          c3)])
+          (bytes-set! bytes j (& (>> bits 16) 255))
+          ;; Watch out for padding
+          (when (< (+ j 1) out-len)
+            (bytes-set! bytes (+ j 1) (& (>> bits 8) 255)))
+          (when (< (+ j 2) out-len)
+            (bytes-set! bytes (+ j 2) (& bits 255)))
+
+          (loop (+ i 4) (+ j 3))))))
 
 (: hex2b64
    (-> String
@@ -188,10 +265,9 @@
     (+ total (vector-ref freq-table byte))))
 
 (: break-single-byte-xor
-   (-> String
+   (-> Bytes
        Candidate))
-(define (break-single-byte-xor input)
-  (define ciphertext (hex-string->bytes input))
+(define (break-single-byte-xor ciphertext)
   (define init-best (Candidate ciphertext 0 -1.0))
 
   (for/fold ([current-best : Candidate init-best])
@@ -207,11 +283,6 @@
         (Candidate plaintext (cast key Byte) score)
         current-best)))
 
-(: read-lines-as-list (-> String (Listof String)))
-(define (read-lines-as-list path)
-  (call-with-input-file path
-    (lambda ([in : Input-Port])
-      (sequence->list (in-lines in)))))
 
 (: find-single-byte-xor
    (-> (Listof String)
@@ -221,7 +292,7 @@
   (for/fold ([current-best : Candidate init-best])
             ([str (in-list messages)])
     (define candidate
-      (break-single-byte-xor str))
+      (break-single-byte-xor (hex-string->bytes str)))
     (if (> (Candidate-score candidate)
            (Candidate-score current-best))
         candidate
@@ -246,21 +317,84 @@
   (define (count-ones-loop b sum)
     (cond [(zero? b) sum]
           [else
-           (count-ones-loop (& b (- b 1))
+           (count-ones-loop (& b (sub1 b))
                             (+ 1 sum))]))
   (count-ones-loop b 0))
 
 ;; Compute the hamming distance between two byte strings.
-(: ham-bytes (-> Bytes Bytes Nonnegative-Integer))
-(define (ham-bytes byt1 byt2)
+(: hamming (-> Bytes Bytes Nonnegative-Integer))
+(define (hamming byt1 byt2)
   (define xord (fixed-xor byt1 byt2))
   (for/fold ([dist : Nonnegative-Integer 0])
             ([byte (in-bytes xord)])
     (+ dist (count-ones byte))))
 
-(: hamming (-> String String Nonnegative-Integer))
-(define (hamming str1 str2)
-  (ham-bytes (hex-encode str1) (hex-encode str2)))
+;; too good to pass up
+(: ham-string (-> String String Nonnegative-Integer))
+(define (ham-string str1 str2)
+  (hamming (hex-encode str1) (hex-encode str2)))
+
+;; Compare edit distance between each of the first 4 chunks
+;; Assumes the Byte string is big enough for this
+(: score-keysize (-> Bytes Nonnegative-Integer Inexact-Real))
+(define (score-keysize bytes size)
+  (let* ([num-blocks 4]
+         [total-dist
+          (for/sum : Nonnegative-Integer ([i (in-range (sub1 num-blocks))])
+            (let ([b0 (read-chunk bytes (* i size) (* (add1 i) size))]
+                  [b1 (read-chunk bytes (* (add1 i) size) (* (+ i 2) size))])
+              (hamming b0 b1)))])
+    (exact->inexact (/ total-dist (sub1 num-blocks) size))))
+
+;; Return the top 3 keysizes by edit distance
+(: find-top-keysizes
+   (-> Bytes (Listof Nonnegative-Integer)))
+(define (find-top-keysizes bytes)
+  (take
+   (sort (range 2 41)
+         (λ ([s1 : Nonnegative-Integer] [s2 : Nonnegative-Integer])
+           (< (score-keysize bytes s1)
+              (score-keysize bytes s2))))
+   3))
+
+;; Produce a vector of bytes corresponding to the transpose of the input 
+;; Byte string. Each vector consists of characters read with stride keysize.
+(: transpose-keysize
+   (-> Bytes Nonnegative-Integer Nonnegative-Integer (Vectorof Bytes)))
+(define
+  (transpose-keysize bytes keysize len)
+  (for/vector : (Vectorof Bytes) ([i (in-range keysize)])
+    (let* ([block-size (quotient (+ len (- keysize i 1)) keysize)]
+           [buf (make-bytes block-size)])
+      (for ([j (in-range block-size)])
+        (let ([idx (+ i (* j keysize))])
+          (when (< idx len)
+            (bytes-set! buf j (bytes-ref bytes idx)))))
+      buf)))
+
+;; Play that funky music...
+(: break-repeating-key-xor
+   (-> Bytes
+       Bytes))
+(define (break-repeating-key-xor bytes)
+  (define len (bytes-length bytes))
+  (define keysizes (find-top-keysizes bytes))
+  (argmax
+   (λ ([plaintext : Bytes]) (score-text plaintext))
+   (for/list : (Listof Bytes) ([size (in-list keysizes)])
+     (let* ([blocks (transpose-keysize bytes size len)]
+            [candidates (vector-map break-single-byte-xor blocks)]
+            [key (list->bytes
+                  (for/list ([c (in-vector candidates)])
+                    (Candidate-key c)))])
+       (fixed-xor bytes
+                  (list->bytes
+                   (for/list ([_i (in-range len)]
+                              [b (in-cycle key)]) ;; This is not a good way to do things
+                     b)))))))
+
+
+
 
 
 ;; =========== TESTS =============
@@ -297,7 +431,7 @@
               8)
 (check-equal? (count-ones (hex-pair->byte #\A #\A))
               4)
-(check-equal? (hamming "this is a test" "wokka wokka!!!")
+(check-equal? (ham-string "this is a test" "wokka wokka!!!")
               37)
 
 
@@ -314,7 +448,8 @@
 
 ;; Set 1, Challenge 3
 (define challenge-3-secret
-  (break-single-byte-xor "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736"))
+  (break-single-byte-xor (hex-string->bytes
+                          "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736")))
 (Candidate-plaintext challenge-3-secret)
 (Candidate-key challenge-3-secret)
 
@@ -334,3 +469,7 @@ I go crazy when I hear a cymbal")
               challenge-5-ciphertext)
 
 ;; Set 1, Challenge 6
+(define challenge-6-secret
+  (break-repeating-key-xor
+   (base64-file->bytes "./data/6.txt")))
+(displayln challenge-6-secret)
